@@ -52,27 +52,20 @@ data_path = args.data_path
 out_dir = args.output_path
 save_path = args.save_path
 device_map = "auto"
-world_size = int(os.environ.get("WORLD_SIZE", 1))
+world_size = int(os.environ.get("WORLD_SIZE", 1))  # 获取当前的多机环境
 ddp = world_size != 1
 if ddp:
-    device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
-    gradient_accumulation_steps = gradient_accumulation_steps // world_size
+    device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}  # 如果当前不止有一张卡，则修改 device_map
+    gradient_accumulation_steps = gradient_accumulation_steps // world_size  # 需要配合多卡，切分梯度累积步数，batch会呗拆分到多张卡上
 
-# # 使用具有 4 位精度的对称量化方案nf4
-# bnb_config = BitsAndBytesConfig(
-#     load_in_4bit=True,
-#     bnb_4bit_use_double_quant=True,
-#     bnb_4bit_quant_type="nf4",
-#     bnb_4bit_compute_dtype=torch.bfloat16
-# )
 # 加载模型
 model = LlamaForCausalLM.from_pretrained(
     args.model_path,
     load_in_8bit=True,
     device_map=device_map,
 )
-
 model = prepare_model_for_kbit_training(model)  # 应用量化方案
+
 tokenizer = LlamaTokenizer.from_pretrained(args.model_path, add_eos_token=True)  # 加载分词器
 tokenizer.pad_token_id = 0  # 为了区分EOStoken
 
