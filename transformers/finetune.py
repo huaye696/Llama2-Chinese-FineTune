@@ -5,33 +5,27 @@ import torch
 import datasets
 import time
 from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
-    DataCollatorForSeq2Seq,
     Trainer,
     TrainingArguments,
-    GenerationConfig,
-    DefaultDataCollator, LlamaTokenizer, LlamaForCausalLM
+    LlamaTokenizer,
+    LlamaForCausalLM
 )
 import argparse
-from peft import PeftModel, LoraConfig, prepare_model_for_kbit_training, get_peft_model, get_peft_model_state_dict
+from peft import PeftModel, LoraConfig, prepare_model_for_kbit_training, get_peft_model
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", default=False)  # 训练进度和结果的上报目标
-parser.add_argument("--data_path", type=str, default="allData.csv")  # 微调数据集目录
-parser.add_argument("--output_path", type=str, default="llama-2-chinese-finetune-point")  # 模型检查点输出目录
-parser.add_argument("--save_path", type=str, default="llama-2-finetune-model")  # 模型最终保存目录
-parser.add_argument("--model_path", type=str, default="model/llama-7b-hf")  # llama2的模型目录
-parser.add_argument("--eval_steps", type=int, default=200)  # 评估间隔步数
-parser.add_argument("--save_steps", type=int, default=2000)  # 模型保存间隔步数。
+parser.add_argument("--data_path", type=str, default="None")  # 微调数据集目录
+parser.add_argument("--output_path", type=str, default="None")  # 模型检查点输出目录
+parser.add_argument("--save_path", type=str, default="None")  # 模型最终保存目录
+parser.add_argument("--model_path", type=str, default="None")  # llama2的模型目录
 parser.add_argument("--val_size", type=float, default=0.3)  # 验证集比例
 args = parser.parse_args()
 
 """基本训练超参设置"""
 batch_size = 128  # 批次大小
-micro_batch_size = 4  # 每个GPU上的训练批量大小。
+micro_batch_size = 16  # 每个GPU上的训练批量大小。
 gradient_accumulation_steps = batch_size // micro_batch_size  # 梯度累积步数
 lr = 3e-4  # 学习率
 val_set_size = args.val_size  # 训练集大小
@@ -40,7 +34,6 @@ val_size = args.val_size
 
 # 同时设置了这两个参数，训练将在任一条件首先满足时停止。
 num_train_epochs  = 8  # 遍历整个训练数据集的次数
-max_steps = 0 # 训练过程中执行的最大步数，一步通常指的是基于一个批次数据进行一次前向传播和一次后向传播的过程。
 
 """lora参数设置"""
 lora_r = 8
@@ -151,35 +144,33 @@ cols = ["instruction", "input", "output"]
 train_data = train_dataset.shuffle().map(generate_and_tokenize_prompt, remove_columns=cols)
 val_data = test_dataset.shuffle().map(generate_and_tokenize_prompt, remove_columns=cols)
 
-max_steps = max((len(train_data) // batch_size * num_train_epochs, num_train_epochs))
-
 # 训练器
-args=transformers.TrainingArguments(
-        per_device_train_batch_size=micro_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        warmup_steps=100,
-        num_train_epochs=num_train_epochs,
-        max_steps=max_steps,
-        learning_rate=lr,
-        fp16=True,
-        logging_steps=20,
-        evaluation_strategy="steps" if val_size > 0 else "no",
-        save_strategy="steps",
-        eval_steps=args.eval_steps if val_size > 0 else None,
-        save_steps=args.save_steps,
-        output_dir=out_dir,
-        save_total_limit=30,
-        load_best_model_at_end=True if val_size > 0 else False,
-        ddp_find_unused_parameters=False if ddp else None,
-        report_to="wandb" if args.wandb else [],
-        ignore_data_skip=False,
+args=TrainingArguments(
+    per_device_train_batch_size=micro_batch_size,
+    gradient_accumulation_steps=gradient_accumulation_steps,
+    warmup_steps=100,
+    num_train_epochs=num_train_epochs,
+    learning_rate=lr,
+    fp16=True,
+    logging_steps=5,
+    evaluation_strategy="steps" if val_size > 0 else "no",
+    save_strategy="steps",
+    eval_steps=32 if val_size > 0 else None,
+    save_steps=64,
+    output_dir=out_dir,
+    save_total_limit=10,
+    load_best_model_at_end=True if val_size > 0 else False,
+    ddp_find_unused_parameters=False if ddp else None,
+    report_to="wandb" if args.wandb else [],
+    ignore_data_skip=False,
 )  # 定义训练参数
-trainer = transformers.Trainer(
+
+trainer = Trainer(
     model=model,
     train_dataset=train_data,
     eval_dataset=val_data,
     args=args,
-    data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False)
+    data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False)
 )
 model.config.use_cache = False
 
