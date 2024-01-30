@@ -9,7 +9,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     LlamaTokenizer,
-    LlamaForCausalLM
+    LlamaForCausalLM, BitsAndBytesConfig
 )
 import argparse
 from peft import PeftModel, LoraConfig, prepare_model_for_kbit_training, get_peft_model
@@ -21,6 +21,7 @@ parser.add_argument("--output_path", type=str, default="None")  # 模型检查�
 parser.add_argument("--save_path", type=str, default="None")  # 模型最终保存目录
 parser.add_argument("--model_path", type=str, default="None")  # llama2的模型目录
 parser.add_argument("--val_size", type=float, default=0.3)  # 验证集比例
+parser.add_argument("--num_train_epochs", type=int, default=1)  # 验证集比例
 args = parser.parse_args()
 
 """基本训练超参设置"""
@@ -33,7 +34,7 @@ max_length = 1024  # 最大输入token长度
 val_size = args.val_size
 
 # 同时设置了这两个参数，训练将在任一条件首先满足时停止。
-num_train_epochs  = 8  # 遍历整个训练数据集的次数
+num_train_epochs  = args.num_train_epochs  # 遍历整个训练数据集的次数
 
 """lora参数设置"""
 lora_r = 8
@@ -51,10 +52,16 @@ if ddp:
     device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}  # 如果当前不止有一张卡，则修改 device_map
     gradient_accumulation_steps = gradient_accumulation_steps // world_size  # 需要配合多卡，切分梯度累积步数，batch会呗拆分到多张卡上
 
-# 加载模型
+# 量化配置，加载模型
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16
+)
 model = LlamaForCausalLM.from_pretrained(
     args.model_path,
-    load_in_8bit=True,
+    quantization_config=bnb_config,
     device_map=device_map,
 )
 model = prepare_model_for_kbit_training(model)  # 应用量化方案
@@ -148,18 +155,15 @@ val_data = test_dataset.shuffle().map(generate_and_tokenize_prompt, remove_colum
 args=TrainingArguments(
     per_device_train_batch_size=micro_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    warmup_steps=100,
     num_train_epochs=num_train_epochs,
     learning_rate=lr,
     fp16=True,
-    logging_steps=5,
-    evaluation_strategy="steps" if val_size > 0 else "no",
+    logging_steps=10,
+    evaluation_strategy="no",
     save_strategy="steps",
-    eval_steps=32 if val_size > 0 else None,
-    save_steps=64,
+    save_steps=32,
     output_dir=out_dir,
     save_total_limit=10,
-    load_best_model_at_end=True if val_size > 0 else False,
     ddp_find_unused_parameters=False if ddp else None,
     report_to="wandb" if args.wandb else [],
     ignore_data_skip=False,

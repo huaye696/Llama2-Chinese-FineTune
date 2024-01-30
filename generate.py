@@ -5,8 +5,8 @@ import argparse
 from transformers import LlamaTokenizer, LlamaForCausalLM, GenerationConfig
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--llm_path", type=str, default=False)  # 训练进度和结果的上报目标
-parser.add_argument("--lora_path", type=str, default=False)  # 微调数据集目录
+parser.add_argument("--llm_path", type=str, default="../BigFile/model/Llama_Model")  # 训练进度和结果的上报目标
+parser.add_argument("--lora_path", type=str, default="../BigFile/save/model-save-2GPU")  # 微调数据集目录
 args = parser.parse_args()
 if torch.cuda.is_available():
     device = "cuda"
@@ -26,11 +26,16 @@ model = PeftModel.from_pretrained(
 model.eval()
 
 generation_config = GenerationConfig(
-    do_sample=True,
     temperature=0.1,
     top_p=0.75,
     top_k=40,
-    num_beams=4, # beam search
+    num_beams=4,
+    bos_token_id=1,
+    eos_token_id=2,
+    pad_token_id=0,
+    max_new_tokens=256, # max_length=max_new_tokens+input_sequence
+    min_new_tokens=1, # min_length=min_new_tokens+input_sequence,
+    do_sample=True
 )
 tokenizer = LlamaTokenizer.from_pretrained(args.llm_path)
 tokenizer.pad_token_id = 0  # 为了区分EOStoken
@@ -54,26 +59,22 @@ def generate_prompt(instruction, input=None):
 
 ### Response:"""
 
-def generate(input):
-    prompt = generate_prompt(input)
-    inputs = tokenizer(prompt, return_tensors="pt")
-    input_ids = inputs["input_ids"].to(device)
-    with torch.no_grad():
-        for generation_output in model.stream_generate(
-            input_ids=input_ids,
-            generation_config=generation_config,
-            return_dict_in_generate=True,
-            output_scores=False,
-            repetition_penalty=float(2.0),
-        ):
-            outputs = tokenizer.batch_decode(generation_output)
-            show_text = "\n--------------------------------------------\n".join(
-                [output.split("### Response:")[1].strip().replace('�','')+" ▌" for output in outputs]
+def generate():
+    while True:  # 创建一个无限循环
+        user_input = input("Input you question：\n")
+        prompt = generate_prompt(user_input)
+        inputs = tokenizer(prompt, return_tensors="pt")
+        input_ids = inputs["input_ids"].to(device)
+        with torch.no_grad():
+            generation_output = model.generate(
+                input_ids=input_ids,
+                generation_config=generation_config,
+                return_dict_in_generate=True,
+                output_scores=False,
+                repetition_penalty=1.3,
             )
-            yield show_text
-        return outputs[0].split("### Response:")[1].strip().replace('�','')
+            output = generation_output.sequences[0]
+            output = tokenizer.decode(output).split("### Response:")[1].strip()
+            print(output)
 
-
-while True:  # 创建一个无限循环
-    user_input = input("Input you question：")  # 获取用户输入
-    print(generate(user_input))
+generate()
